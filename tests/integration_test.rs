@@ -98,8 +98,8 @@ async fn test_sync_dialog() {
 
     // UPD: should have accounts
     assert!(!synced.bank_params().accounts_from_upd.is_empty(), "Should have accounts from UPD");
-    let has_test = synced.bank_params().accounts_from_upd.iter().any(|a| a.iban.as_str() == "DE111234567800000001");
-    assert!(has_test, "Should have test account DE111234567800000001");
+    let has_test = synced.bank_params().accounts_from_upd.iter().any(|a| a.iban.as_str() == "DE11123456780000000001");
+    assert!(has_test, "Should have test account DE11123456780000000001");
 
     // HIPINS: should know which ops need TAN
     assert!(!synced.bank_params().operation_tan_required.is_empty(), "HIPINS should be parsed");
@@ -139,7 +139,7 @@ async fn test_init_no_tan_then_business_ops() {
     let (mut open, _resp) = dialog.init_no_tan().await.expect("init_no_tan failed");
 
     // Create a validated Account (BIC required!)
-    let account = Account::new("DE111234567800000001", "GENODE23X42").unwrap();
+    let account = Account::new("DE11123456780000000001", "GENODE23X42").unwrap();
 
     // Dialog<Open> → balance(&account) → typed BalanceResult
     let result = open.balance(&account).await.expect("balance() failed");
@@ -174,7 +174,7 @@ async fn test_transactions_with_pagination() {
     let (mut open, _) = dialog.init_no_tan().await.expect("init failed");
 
     // Create a validated Account
-    let account = Account::new("DE111234567800000001", "GENODE23X42").unwrap();
+    let account = Account::new("DE11123456780000000001", "GENODE23X42").unwrap();
 
     let start = chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap();
     let end_date = chrono::NaiveDate::from_ymd_opt(2015, 12, 31).unwrap();
@@ -262,7 +262,7 @@ async fn test_sepa_accounts_from_upd() {
 
     assert!(!accounts.is_empty(), "Should have at least one account from UPD");
     assert!(
-        accounts.iter().any(|a| a.iban.as_str() == "DE111234567800000001"),
+        accounts.iter().any(|a| a.iban.as_str() == "DE11123456780000000001"),
         "Should have test account, got: {:?}",
         accounts.iter().map(|a| &a.iban).collect::<Vec<_>>()
     );
@@ -358,7 +358,7 @@ async fn test_rust_server_balance() {
     let dialog = mock_dialog(port).with_system_id(&sys_id).with_params(&params);
     let (mut open, _) = dialog.init_no_tan().await.expect("init failed");
 
-    let account = Account::new("DE111234567800000001", "GENODE23X42").unwrap();
+    let account = Account::new("DE11123456780000000001", "GENODE23X42").unwrap();
     let result = open.balance(&account).await.expect("balance failed");
 
     match result {

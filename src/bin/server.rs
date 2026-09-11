@@ -558,8 +558,8 @@ HIPINS:54:1:4+1+1+1+5:20:6:Benutzer ID::HKSPA:N:HKKAZ:N:HKSAL:N:HKTAN:N'",
 
 fn build_upd() -> &'static str {
     "HIUPA:57:4:4+test1+3+0'\
-HIUPD:58:6:4+1::280:12345678+DE111234567800000001+GENODE23X42+test1+EUR+Fullname++Girokonto++HKSAL:1+HKKAZ:1+HKSPA:1'\
-HIUPD:59:6:4+2::280:12345678+DE111234567800000002+GENODE23X42+test1+EUR+Fullname++Tagesgeld++HKSAL:1+HKKAZ:1+HKSPA:1'"
+HIUPD:58:6:4+1::280:12345678+DE11123456780000000001+GENODE23X42+test1+EUR+Fullname++Girokonto++HKSAL:1+HKKAZ:1+HKSPA:1'\
+HIUPD:59:6:4+2::280:12345678+DE11123456780000000002+GENODE23X42+test1+EUR+Fullname++Tagesgeld++HKSAL:1+HKKAZ:1+HKSPA:1'"
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -645,7 +645,7 @@ async fn make_answer(
     // Handle HKSPA — SEPA account list
     if has_segment(message, "HKSPA") {
         result.extend_from_slice(
-            b"HISPA::1:4+J:DE111234567800000001:GENODE23X42:00001::280:12345678'"
+            b"HISPA::1:4+J:DE11123456780000000001:GENODE23X42:00001::280:12345678'"
         );
     }
 

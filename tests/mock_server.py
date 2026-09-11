@@ -11,7 +11,7 @@ Test credentials:
   BLZ:      12345678
   Username: test1
   PIN:      1234 (valid), 3938 (temp locked), anything else = invalid
-  Accounts: DE111234567800000001 (Girokonto), DE111234567800000002 (Tagesgeld)
+  Accounts: DE11123456780000000001 (Girokonto), DE11123456780000000002 (Tagesgeld)
 
 Usage:
   python3 mock_server.py [port]
@@ -86,8 +86,8 @@ def make_server(host="127.0.0.1", port=0):
                     )
                     segments.append(
                         b"HIUPA:57:4:4+test1+3+0'"
-                        b"HIUPD:58:6:4+1::280:12345678+DE111234567800000001+test1++EUR+Fullname++Girokonto++HKSAL:1+HKKAZ:1+HKSPA:1'"
-                        b"HIUPD:59:6:4+2::280:12345678+DE111234567800000002+test1++EUR+Fullname++Tagesgeld++HKSAL:1+HKKAZ:1+HKSPA:1'"
+                        b"HIUPD:58:6:4+1::280:12345678+DE11123456780000000001+test1++EUR+Fullname++Girokonto++HKSAL:1+HKKAZ:1+HKSPA:1'"
+                        b"HIUPD:59:6:4+2::280:12345678+DE11123456780000000002+test1++EUR+Fullname++Tagesgeld++HKSAL:1+HKKAZ:1+HKSPA:1'"
                     )
 
                 if pin == "3938":
@@ -111,7 +111,7 @@ def make_server(host="127.0.0.1", port=0):
 
             if b"HKSPA:" in message:
                 result.append(
-                    b"HISPA::1:4+J:DE111234567800000001:GENODE23X42:00001::280:12345678'"
+                    b"HISPA::1:4+J:DE11123456780000000001:GENODE23X42:00001::280:12345678'"
                 )
 
             # HKSAL - Balance request (v5-7)

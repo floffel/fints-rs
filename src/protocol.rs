@@ -382,6 +382,21 @@ impl BankParams {
         self.operation_tan_required.get(segment_type).copied().unwrap_or(true)
     }
 
+    /// Whether every read this library issues is PIN-only per HIPINS.
+    ///
+    /// A two-step method in 3920's allowed-security-function set is not the
+    /// same as that method being required: 3920 states what the bank *can*
+    /// sign with, HIPINS states what each operation *needs*. ING advertises
+    /// two-step TAN and still signs every read with PIN-only, rejecting a
+    /// two-step signature on them as a malformed signature structure rather
+    /// than a missing TAN.
+    pub fn reads_are_pin_only(&self) -> bool {
+        const READ_SEGMENTS: [&str; 3] = ["HKSAL", "HKKAZ", "HKWPD"];
+        READ_SEGMENTS
+            .iter()
+            .all(|s| !self.needs_tan(&SegmentType::new(*s)))
+    }
+
     /// HKTAN version for the selected TAN method.
     pub fn hktan_version(&self) -> u16 {
         self.tan_methods.iter()
@@ -401,6 +416,14 @@ impl BankParams {
 
     /// Select the best security function from 3920 allowed list.
     pub fn select_security_function(&mut self) {
+        if self.reads_are_pin_only() {
+            info!(
+                "[FinTS] HIPINS: every read this library issues is PIN-only, staying on {}",
+                self.selected_security_function
+            );
+            return;
+        }
+
         let allowed = &self.allowed_security_functions;
         if allowed.is_empty() { return; }
 
@@ -639,10 +662,19 @@ impl Dialog<New> {
 
     /// Normal dialog initialization (spec: Dialoginitialisierung).
     ///
-    /// Sends HKIDN + HKVVB + HKTAN(process=4, ref=HKIDN).
+    /// Sends HKIDN + HKVVB + HKTAN(process=4, ref=HKIDN), or HKIDN + HKVVB
+    /// alone when HIPINS marks every read as PIN-only.
     /// Response-driven: returns `InitResult::Opened` or `InitResult::TanRequired`
     /// based on the bank's response codes.
     pub async fn init(mut self) -> Result<InitResult> {
+        // A PIN-only bank answers an HKTAN process-4 segment with a
+        // malformed-signature error rather than a TAN challenge.
+        if self.params.reads_are_pin_only() {
+            info!("[FinTS] HIPINS: every read is PIN-only, initializing without HKTAN");
+            let (open, response) = self.init_no_tan().await?;
+            return Ok(InitResult::Opened(open, response));
+        }
+
         let medium = self.params.selected_tan_medium.clone();
         info!("[FinTS] Init dialog: BLZ={} security_fn={}", self.blz, self.params.selected_security_function);
 
@@ -715,22 +747,24 @@ impl Dialog<Synced> {
 // Account — validated account identifier (IBAN + BIC, both required)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// A validated bank account identifier (Kontoverbindung International).
+/// A validated bank account identifier (Kontoverbindung).
 ///
-/// Both IBAN and BIC are required and non-empty. This is enforced at
-/// construction time — you cannot create an `Account` with a missing BIC.
-/// All typed business operations on `Dialog<Open>` take `&Account`,
-/// making it a compile error to pass raw strings that might be empty.
+/// Construction enforces a normalized 22-character German IBAN and a
+/// non-empty BIC, so every segment builder can address the account in either
+/// the international (KTI) or the national (KTO) form without re-checking.
+/// All typed business operations on `Dialog<Open>` take `&Account`, making it
+/// a compile error to pass raw strings that might be empty or malformed.
 ///
 /// ```
 /// use fints::protocol::Account;
 ///
-/// // This works:
-/// let acc = Account::new("DE89370400440532013000", "COBADEFFXXX").unwrap();
+/// // This works, spaces and all:
+/// let acc = Account::new("DE89 3704 0044 0532 0130 00", "COBADEFFXXX").unwrap();
+/// assert_eq!(acc.iban(), "DE89370400440532013000");
 ///
-/// // This fails at construction time:
-/// let bad = Account::new("DE89370400440532013000", "");
-/// assert!(bad.is_err());
+/// // These fail at construction time:
+/// assert!(Account::new("DE89370400440532013000", "").is_err());
+/// assert!(Account::new("FR1420041010050500013M02606", "BNPAFRPP").is_err());
 /// ```
 #[derive(Debug, Clone)]
 pub struct Account {
@@ -739,10 +773,21 @@ pub struct Account {
 }
 
 impl Account {
-    /// Create a validated account. Returns `Err` if IBAN or BIC is empty.
+    /// Create a validated account. Whitespace is stripped and the IBAN
+    /// uppercased before validation, so a printed IBAN is accepted as-is.
     pub fn new(iban: &str, bic: &str) -> Result<Self> {
-        if iban.is_empty() {
-            return Err(FinTSError::Dialog("IBAN must not be empty".into()));
+        let iban: String = iban
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .map(|c| c.to_ascii_uppercase())
+            .collect();
+        let is_german_iban = iban.len() == 22
+            && iban.starts_with("DE")
+            && iban.bytes().all(|b| b.is_ascii_alphanumeric());
+        if !is_german_iban {
+            return Err(FinTSError::Dialog(format!(
+                "IBAN must be a 22-character German IBAN, got {iban:?}"
+            )));
         }
         if bic.is_empty() {
             return Err(FinTSError::Dialog("BIC must not be empty. Please set the BIC in the account settings.".into()));
@@ -790,7 +835,11 @@ pub enum TransactionResult {
 pub struct HoldingsPage {
     /// Parsed securities positions.
     pub holdings: Vec<SecurityHolding>,
-    /// If Some, more data is available — call `holdings()` again with this value.
+    /// The bank's own `HIWPD` binary payloads, undecoded and in the order it
+    /// stated them. A caller that parses positions from those bytes itself
+    /// takes them from here.
+    pub raw_payloads: Vec<Vec<u8>>,
+    /// If Some, more data is available; call `holdings()` again with this value.
     pub touchdown: Option<TouchdownPoint>,
 }
 
@@ -800,7 +849,9 @@ pub enum HoldingsResult {
     Success(HoldingsPage),
     /// Bank requires TAN for this operation.
     NeedTan(TanChallenge),
-    /// No holdings data in response (depot may be empty or segment not supported).
+    /// No holdings data in response: no `HIWPD` position and no binary
+    /// payload, and no further page (the depot is empty or the segment is
+    /// unsupported).
     Empty,
 }
 
@@ -974,14 +1025,16 @@ impl Dialog<Open> {
 
         // Parse HIWPD segments
         let holdings = parse_hiwpd(&response.segments);
+        let raw_payloads = hiwpd_payloads(&response.segments);
         let td = response.touchdown();
 
-        if holdings.is_empty() && td.is_none() {
+        if holdings.is_empty() && raw_payloads.is_empty() && td.is_none() {
             return Ok(HoldingsResult::Empty);
         }
 
         Ok(HoldingsResult::Success(HoldingsPage {
             holdings,
+            raw_payloads,
             touchdown: td,
         }))
     }

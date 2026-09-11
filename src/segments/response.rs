@@ -435,6 +435,33 @@ pub(crate) fn parse_hiwpd(segments: &[RawSegment]) -> Vec<SecurityHolding> {
     holdings
 }
 
+/// Every binary payload a `HIWPD` answer carries, in the order the bank
+/// stated it.
+///
+/// A bank may state its positions in one binary DEG rather than one position
+/// per DEG, a shape the heuristic above cannot read. A caller that parses the
+/// payload itself takes the bytes from here rather than losing the answer to
+/// `Empty`.
+pub(crate) fn hiwpd_payloads(segments: &[RawSegment]) -> Vec<Vec<u8>> {
+    let mut payloads = Vec::new();
+
+    for seg in segments {
+        if seg.segment_type() != "HIWPD" {
+            continue;
+        }
+        for i in 0..seg.deg_count() {
+            let d = seg.deg(i);
+            for j in 0..d.len() {
+                if let Some(bytes) = d.get(j).as_bytes() {
+                    payloads.push(bytes.to_vec());
+                }
+            }
+        }
+    }
+
+    payloads
+}
+
 /// Parse a single holding position from a DEG.
 /// Uses heuristic detection since HIWPD layout varies between banks and versions.
 fn parse_holding_deg(d: &crate::parser::DEG) -> Option<SecurityHolding> {
@@ -908,6 +935,20 @@ mod tests {
         let seg = parse_segment("HIWPD:5:6:3+DE04120300001084174299:BYLADEM1001'");
         let holdings = parse_hiwpd(&[seg]);
         assert!(holdings.is_empty());
+    }
+
+    #[test]
+    fn test_hiwpd_payloads_collect_the_binary_deg() {
+        let seg = parse_segment("HIWPD:4:6:3+@5@hello'");
+        assert_eq!(hiwpd_payloads(&[seg]), vec![b"hello".to_vec()]);
+    }
+
+    #[test]
+    fn test_hiwpd_payloads_ignore_structured_positions() {
+        let seg = parse_segment(
+            "HIWPD:5:6:3+DE04120300001084174299:BYLADEM1001+DE0005140008:514000:DEUTSCHE BANK AG:100,00:42,50:EUR:20260315'"
+        );
+        assert!(hiwpd_payloads(&[seg]).is_empty());
     }
 
     #[test]

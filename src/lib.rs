@@ -22,7 +22,7 @@
 //!     &UserId::new("user"), &Pin::new("pin"), &ProductId::new("PRODUCT_ID"), None,
 //! ).await?;
 //! // User confirms pushTAN in banking app...
-//! let account = Account::new("DE123...", "BYLADEM1001")?;  // BIC required!
+//! let account = Account::new("DE89370400440532013000", "BYLADEM1001")?;  // German IBAN + BIC required!
 //! let data = session.fetch(&account, 365).await?;
 //! println!("Balance: {:?}, {} transactions", data.balance, data.transactions.len());
 //! # Ok(())

@@ -60,6 +60,72 @@ impl Kti {
     }
 }
 
+// ---- KTO (Kontoverbindung, national form) ----
+
+/// Typed representation of a KTO DEG (Kontoverbindung, national form).
+///
+/// Per the FinTS spec, KTO has 4 data elements in this order:
+///   1. Konto-/Depotnummer (account number)
+///   2. Unterkontomerkmal (sub-account feature, left empty)
+///   3. Kreditinstitutskennung Landeskennzeichen (country code, "280" for Germany)
+///   4. Bankleitzahl (bank code)
+///
+/// Segment versions predating the international form (KTI) address the
+/// account this way.
+struct Kto {
+    account_number: String,
+    blz: String,
+}
+
+impl Kto {
+    /// Recover the account number and Bankleitzahl from the fixed German IBAN
+    /// layout: country code, 2 check digits, 8-digit Bankleitzahl, 10-digit
+    /// account number.
+    ///
+    /// # Panics
+    /// Panics if `iban` is not a 22-character German IBAN, the shape
+    /// `Account::new` establishes.
+    fn from_german_iban(iban: &str) -> Self {
+        assert!(
+            iban.len() == 22 && iban.starts_with("DE"),
+            "national account form (KTO) requires a 22-character German IBAN, got {iban:?}"
+        );
+        Self {
+            account_number: iban[12..22].to_string(),
+            blz: iban[4..12].to_string(),
+        }
+    }
+
+    /// Serialize into a DEG: `account_number::280:blz`.
+    fn to_deg(&self) -> DEG {
+        deg(vec![
+            DataElement::Text(self.account_number.clone()),
+            DataElement::Empty,
+            DataElement::Text("280".to_string()),
+            DataElement::Text(self.blz.clone()),
+        ])
+    }
+}
+
+// ---- Account connection ----
+
+// Segment version at which each read switches from the national account form
+// (KTO) to the international one (KTI). HKWPD's cutover is a version later:
+// ING negotiates HKWPD version 6 and still expects the national form there.
+const KTI_MIN_VERSION_HKSAL: u16 = 6;
+const KTI_MIN_VERSION_HKKAZ: u16 = 6;
+const KTI_MIN_VERSION_HKWPD: u16 = 7;
+
+/// The Auftraggeberkontoverbindung DEG for a segment version: KTI at or above
+/// `kti_min_version`, KTO below it.
+fn account_deg(version: u16, kti_min_version: u16, iban: &str, bic: &str) -> DEG {
+    if version >= kti_min_version {
+        Kti::new(iban, bic).to_deg()
+    } else {
+        Kto::from_german_iban(iban).to_deg()
+    }
+}
+
 // ---- Segment Header ----
 
 /// Create a segment header DEG: `TYPE:NUMBER:VERSION`
@@ -437,7 +503,7 @@ pub(crate) fn hkspa(segment_number: u16, version: u16) -> Vec<DEG> {
 
 // ---- HKSAL (Saldenabfrage) - Balance Request, version 5-7 ----
 
-/// Build HKSAL for a specific SEPA account. Version 7 uses international account (IBAN/BIC).
+/// Build HKSAL for a specific SEPA account.
 pub(crate) fn hksal(
     segment_number: u16,
     version: u16,
@@ -445,26 +511,11 @@ pub(crate) fn hksal(
     bic: &str,
     touchdown: Option<&str>,
 ) -> Vec<DEG> {
-    let mut degs = if version >= 6 {
-        // Version 6+: international account (KTI)
-        vec![
-            seg_header("HKSAL", segment_number, version),
-            Kti::new(iban, bic).to_deg(),
-            deg1(de_text("N")),
-        ]
-    } else {
-        // Version 5: national account format (KTO)
-        vec![
-            seg_header("HKSAL", segment_number, version),
-            deg(vec![
-                de_text(iban),
-                de_empty(),
-                de_text("280"),
-                de_text(bic),
-            ]),
-            deg1(de_text("N")),
-        ]
-    };
+    let mut degs = vec![
+        seg_header("HKSAL", segment_number, version),
+        account_deg(version, KTI_MIN_VERSION_HKSAL, iban, bic),
+        deg1(de_text("N")),
+    ];
 
     // Max entries (optional)
     degs.push(deg1(de_empty()));
@@ -488,29 +539,13 @@ pub(crate) fn hkkaz(
     end_date: NaiveDate,
     touchdown: Option<&str>,
 ) -> Vec<DEG> {
-    let mut degs = if version >= 6 {
-        vec![
-            seg_header("HKKAZ", segment_number, version),
-            Kti::new(iban, bic).to_deg(),
-            deg1(de_text("N")),
-            deg1(de_date(start_date)),
-            deg1(de_date(end_date)),
-        ]
-    } else {
-        // Version 5
-        vec![
-            seg_header("HKKAZ", segment_number, version),
-            deg(vec![
-                de_text(iban),
-                de_empty(),
-                de_text("280"),
-                de_text(bic),
-            ]),
-            deg1(de_text("N")),
-            deg1(de_date(start_date)),
-            deg1(de_date(end_date)),
-        ]
-    };
+    let mut degs = vec![
+        seg_header("HKKAZ", segment_number, version),
+        account_deg(version, KTI_MIN_VERSION_HKKAZ, iban, bic),
+        deg1(de_text("N")),
+        deg1(de_date(start_date)),
+        deg1(de_date(end_date)),
+    ];
 
     // Max entries
     degs.push(deg1(de_empty()));
@@ -530,7 +565,7 @@ pub(crate) fn hkkaz(
 ///
 /// FinTS spec structure:
 ///   DEG0 = header (HKWPD:seg_num:version)
-///   DEG1 = account connection (KTI: IBAN:BIC)
+///   DEG1 = account connection (KTO or KTI, per `KTI_MIN_VERSION_HKWPD`)
 ///   DEG2 = currency (optional, e.g. "EUR" — request prices in this currency)
 ///   DEG3 = quality of data (1=current, 2=cached/last known — optional)
 ///   DEG4 = max entries (optional)
@@ -543,24 +578,10 @@ pub(crate) fn hkwpd(
     currency: Option<&str>,
     touchdown: Option<&str>,
 ) -> Vec<DEG> {
-    let mut degs = if version >= 6 {
-        // Version 6+: international account (KTI)
-        vec![
-            seg_header("HKWPD", segment_number, version),
-            Kti::new(iban, bic).to_deg(),
-        ]
-    } else {
-        // Older versions: national account format
-        vec![
-            seg_header("HKWPD", segment_number, version),
-            deg(vec![
-                de_text(iban),
-                de_empty(),
-                de_text("280"),
-                de_text(bic),
-            ]),
-        ]
-    };
+    let mut degs = vec![
+        seg_header("HKWPD", segment_number, version),
+        account_deg(version, KTI_MIN_VERSION_HKWPD, iban, bic),
+    ];
 
     // Currency (optional)
     degs.push(deg1(if let Some(cur) = currency {
@@ -616,6 +637,35 @@ mod tests {
     }
 
     #[test]
+    fn kto_recovers_account_number_and_blz_from_german_iban() {
+        let kto = Kto::from_german_iban("DE45500105175435780833");
+        assert_eq!(kto.account_number, "5435780833");
+        assert_eq!(kto.blz, "50010517");
+    }
+
+    #[test]
+    fn kto_serializes_as_account_colon_colon_280_colon_blz() {
+        let kto = Kto::from_german_iban("DE45500105175435780833");
+        let bytes = serialize_deg(&kto.to_deg()).unwrap();
+        let wire = String::from_utf8(bytes).unwrap();
+        assert_eq!(wire, "5435780833::280:50010517");
+    }
+
+    #[test]
+    #[should_panic(expected = "national account form (KTO) requires a 22-character German IBAN")]
+    fn kto_rejects_non_german_iban() {
+        Kto::from_german_iban("FR1420041010050500013M02606");
+    }
+
+    #[test]
+    fn hksal_v5_wire_format_uses_national_account_form() {
+        let degs = hksal(3, 5, "DE45500105175435780833", "INGDDEFFXXX", None);
+        let bytes = serialize_segment(&degs).unwrap();
+        let wire = String::from_utf8(bytes).unwrap();
+        assert_eq!(wire, "HKSAL:3:5+5435780833::280:50010517+N'");
+    }
+
+    #[test]
     fn hkkaz_v7_wire_format() {
         let start = chrono::NaiveDate::from_ymd_opt(2025, 3, 29).unwrap();
         let end = chrono::NaiveDate::from_ymd_opt(2026, 3, 29).unwrap();
@@ -634,6 +684,35 @@ mod tests {
             wire,
             "HKKAZ:3:7+DE04120300001084174299:BYLADEM1001+N+20250329+20260329'"
         );
+    }
+
+    #[test]
+    fn hkkaz_v5_wire_format_uses_national_account_form() {
+        let start = chrono::NaiveDate::from_ymd_opt(2026, 9, 4).unwrap();
+        let end = chrono::NaiveDate::from_ymd_opt(2026, 9, 9).unwrap();
+        let degs = hkkaz(
+            3,
+            5,
+            "DE45500105175435780833",
+            "INGDDEFFXXX",
+            start,
+            end,
+            None,
+        );
+        let bytes = serialize_segment(&degs).unwrap();
+        let wire = String::from_utf8(bytes).unwrap();
+        assert_eq!(
+            wire,
+            "HKKAZ:3:5+5435780833::280:50010517+N+20260904+20260909'"
+        );
+    }
+
+    #[test]
+    fn hkwpd_v6_wire_format_uses_national_account_form() {
+        let degs = hkwpd(3, 6, "DE45500105175435780833", "INGDDEFFXXX", None, None);
+        let bytes = serialize_segment(&degs).unwrap();
+        let wire = String::from_utf8(bytes).unwrap();
+        assert_eq!(wire, "HKWPD:3:6+5435780833::280:50010517'");
     }
 
     #[test]

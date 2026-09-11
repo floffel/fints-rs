@@ -16,7 +16,7 @@
 //! println!("Please confirm in your banking app: {}", challenge.challenge);
 //!
 //! // Step 2: Create a validated account (BIC required — compile-time safety)
-//! let account = Account::new("DE12345678901234", "BYLADEM1001")?;
+//! let account = Account::new("DE89370400440532013000", "BYLADEM1001")?;
 //!
 //! // Step 3: After user confirms, fetch data
 //! let result = session.fetch(&account, 365).await?;

@@ -228,7 +228,7 @@ async fn flow_connect_then_confirm_and_fetch() {
     assert!(!flow.system_id().as_str().is_empty(), "system_id should be assigned");
 
     // Step 2: fetch everything.
-    let result = flow.confirm_and_fetch("DE111234567800000001", "GENODE23X42", 365)
+    let result = flow.confirm_and_fetch("DE11123456780000000001", "GENODE23X42", 365)
         .await.expect("confirm_and_fetch failed");
 
     let balance = result.balance.expect("balance should be present");
@@ -237,7 +237,7 @@ async fn flow_connect_then_confirm_and_fetch() {
 
     // Mock returns 2 MT940 pages with 3 transaction lines.
     assert_eq!(result.transactions.len(), 3, "expected 3 transactions, got {:?}", result.transactions);
-    assert_eq!(result.iban.as_str(), "DE111234567800000001");
+    assert_eq!(result.iban.as_str(), "DE11123456780000000001");
     assert_eq!(result.bic.as_str(), "GENODE23X42");
     assert!(result.system_id.is_some(), "system_id should be returned");
 }
@@ -255,10 +255,10 @@ async fn flow_reusing_confirm_twice_fails() {
         mock_any_bank(port), &user, &pin, &product, None, None, None,
     ).await.expect("initiate failed").0;
 
-    flow.confirm_and_fetch("DE111234567800000001", "GENODE23X42", 30)
+    flow.confirm_and_fetch("DE11123456780000000001", "GENODE23X42", 30)
         .await.expect("first fetch should succeed");
 
-    let err = flow.confirm_and_fetch("DE111234567800000001", "GENODE23X42", 30)
+    let err = flow.confirm_and_fetch("DE11123456780000000001", "GENODE23X42", 30)
         .await.expect_err("second fetch should fail (flow already completed)");
     assert!(err.to_string().contains("already completed"), "got: {}", err);
 }
@@ -276,7 +276,7 @@ async fn flow_fetch_balance_only() {
         mock_any_bank(port), &user, &pin, &product, None, None, None,
     ).await.expect("initiate failed").0;
 
-    let result = flow.confirm_and_fetch_opts("DE111234567800000001", "GENODE23X42", &FetchOpts::balance_only())
+    let result = flow.confirm_and_fetch_opts("DE11123456780000000001", "GENODE23X42", &FetchOpts::balance_only())
         .await.expect("balance-only fetch failed");
 
     assert!(result.balance.is_some(), "should have fetched balance");
@@ -298,7 +298,7 @@ async fn flow_fetch_holdings_via_mock() {
     ).await.expect("initiate failed").0;
 
     // The mock server does not answer HKWPD → expect an empty holdings list.
-    let holdings = flow.confirm_and_fetch_holdings("DE111234567800000001", "GENODE23X42")
+    let holdings = flow.confirm_and_fetch_holdings("DE11123456780000000001", "GENODE23X42")
         .await.expect("fetch holdings should not fail against mock");
     assert!(holdings.is_empty(), "mock has no depot data");
 }
@@ -326,7 +326,7 @@ async fn flow_bic_fallback_to_bank_config() {
 
     // Providing an empty BIC falls back to the bank config BIC (GENODE23X42),
     // so the authenticated fetch still succeeds against the mock server.
-    let result = flow.confirm_and_fetch("DE111234567800000001", "", 30)
+    let result = flow.confirm_and_fetch("DE11123456780000000001", "", 30)
         .await.expect("fetch with fallback BIC failed");
     assert!(result.balance.is_some(), "balance should be fetched despite empty BIC");
     assert_eq!(result.transactions.len(), 3);
@@ -346,7 +346,7 @@ async fn generic_bank_direct_balance() {
 
     match bank.initiate(&user, &pin, &product, None, None, None).await.expect("initiate") {
         fints::InitiateOutcome::Authenticated(mut result) => {
-            let account = Account::new("DE111234567800000001", "GENODE23X42").unwrap();
+            let account = Account::new("DE11123456780000000001", "GENODE23X42").unwrap();
             let fetch = bank.fetch(&mut result.dialog, &account, 30).await.expect("fetch failed");
             assert_eq!(fetch.balance.as_ref().map(|b| b.amount.to_string()), Some("1523.42".to_string()));
             assert_eq!(fetch.transactions.len(), 3, "expected 3 transactions");
@@ -359,7 +359,7 @@ async fn generic_bank_direct_balance() {
     match bank.initiate(&user, &pin, &product, None, None, None).await.expect("initiate") {
         fints::InitiateOutcome::Authenticated(result) => {
             let mut dialog = result.dialog;
-            let account = Account::new("DE111234567800000001", "GENODE23X42").unwrap();
+            let account = Account::new("DE11123456780000000001", "GENODE23X42").unwrap();
             match dialog.balance(&account).await.expect("balance") {
                 BalanceResult::Success(bal) => assert_eq!(bal.amount.to_string(), "1523.42"),
                 _ => panic!("expected balance success"),
