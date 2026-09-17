@@ -90,6 +90,19 @@ impl FetchOpts {
 pub trait BankOps: Send + Sync {
     fn config(&self) -> &BankConfig;
 
+    /// Create a fresh dialog for this bank's endpoint.
+    /// Banks that need non-default dialog setup (e.g. ING's security
+    /// function 900) override this or chain builder calls at the call site.
+    fn new_dialog(
+        &self,
+        username: &UserId,
+        pin: &Pin,
+        product_id: &ProductId,
+    ) -> Result<Dialog<New>> {
+        let c = self.config();
+        Dialog::new(c.url.as_str(), &c.blz, username, pin, product_id)
+    }
+
     /// Phase 1: sync + init, return TAN challenge or authenticated dialog.
     fn initiate(
         &self,
@@ -157,16 +170,6 @@ impl Dkb {
             bank: crate::banks::bank_by_blz("12030000")
                 .expect("DKB (BLZ 12030000) must be in bank registry"),
         }
-    }
-
-    fn new_dialog(&self, username: &UserId, pin: &Pin, product_id: &ProductId) -> Result<Dialog<New>> {
-        Dialog::new(
-            self.bank.url.as_str(),
-            &self.bank.blz,
-            username,
-            pin,
-            product_id,
-        )
     }
 }
 
@@ -365,10 +368,6 @@ pub struct GenericBank {
 impl GenericBank {
     pub fn new(config: BankConfig) -> Self {
         Self { bank: config }
-    }
-
-    fn new_dialog(&self, username: &UserId, pin: &Pin, product_id: &ProductId) -> Result<Dialog<New>> {
-        Dialog::new(self.bank.url.as_str(), &self.bank.blz, username, pin, product_id)
     }
 }
 
