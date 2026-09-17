@@ -78,6 +78,88 @@ impl FetchOpts {
     }
 }
 
+/// How the shared transaction fetch reacts when the bank demands an
+/// additional TAN for the HKKAZ request.
+enum TransactionTanPolicy {
+    /// Abort the whole fetch with an error.
+    Error,
+    /// Stop paginating and return the transactions collected so far.
+    Skip,
+}
+
+/// Shared balance fetch (HKSAL): best-effort, any failure yields `None`.
+async fn fetch_balance(
+    dialog: &mut Dialog<Open>,
+    account: &Account,
+    bank: &str,
+) -> Option<AccountBalance> {
+    match dialog.balance(account).await {
+        Ok(BalanceResult::Success(b)) => {
+            info!("[{}] Balance: {}", bank, b.amount);
+            Some(b)
+        }
+        Ok(BalanceResult::NeedTan(_)) => {
+            warn!("[{}] Balance requires additional TAN — skipping", bank);
+            None
+        }
+        Ok(BalanceResult::Empty) => {
+            warn!("[{}] No balance data in response", bank);
+            None
+        }
+        Err(e) => {
+            warn!("[{}] Balance failed: {}", bank, e);
+            None
+        }
+    }
+}
+
+/// Shared transaction fetch (HKKAZ) with touchdown pagination and MT940 parsing.
+async fn fetch_transactions(
+    dialog: &mut Dialog<Open>,
+    account: &Account,
+    start_date: chrono::NaiveDate,
+    end_date: chrono::NaiveDate,
+    bank: &str,
+    tan_policy: TransactionTanPolicy,
+) -> Result<Vec<Transaction>> {
+    info!("[{}] Transactions {} to {}", bank, start_date, end_date);
+
+    let mut all_booked = Mt940Data::new();
+    let mut all_pending = Mt940Data::new();
+    let mut touchdown: Option<TouchdownPoint> = None;
+
+    loop {
+        let result = dialog.transactions(
+            account, start_date, end_date, touchdown.as_ref(),
+        ).await?;
+
+        match result {
+            TransactionResult::NeedTan(_) => match tan_policy {
+                TransactionTanPolicy::Error => {
+                    return Err(FinTSError::Dialog(
+                        "Die Bank erfordert für Transaktionen eine weitere TAN-Freigabe.".into()
+                    ));
+                }
+                TransactionTanPolicy::Skip => break,
+            },
+            TransactionResult::Success(page) => {
+                if !page.booked.is_empty() { all_booked.extend(page.booked.0); }
+                if !page.pending.is_empty() { all_pending.extend(page.pending.0); }
+                touchdown = page.touchdown;
+                if touchdown.is_none() { break; }
+                info!("[{}] Touchdown: more data...", bank);
+            }
+        }
+    }
+
+    let mut transactions = parse_mt940(all_booked.as_bytes(), TransactionStatus::Booked)?;
+    if !all_pending.is_empty() {
+        transactions.extend(parse_mt940(all_pending.as_bytes(), TransactionStatus::Pending)?);
+    }
+    info!("[{}] {} transactions", bank, transactions.len());
+    Ok(transactions)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // BankOps trait
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -236,77 +318,9 @@ impl BankOps for Dkb {
         account: &Account,
         days: u32,
     ) -> Result<FetchResult> {
-        info!("[DKB] Fetching IBAN={}, BIC={}", account.iban(), account.bic());
-
-        // ── Balance (HKSAL) ──
-        let balance = match dialog.balance(account).await {
-            Ok(BalanceResult::Success(b)) => {
-                info!("[DKB] Balance: {}", b.amount);
-                Some(b)
-            }
-            Ok(BalanceResult::NeedTan(_)) => {
-                warn!("[DKB] Balance requires additional TAN — skipping");
-                None
-            }
-            Ok(BalanceResult::Empty) => {
-                warn!("[DKB] No balance data in response");
-                None
-            }
-            Err(e) => {
-                warn!("[DKB] Balance failed: {}", e);
-                None
-            }
-        };
-
-        // ── Transactions (HKKAZ) with pagination ──
-        let end_date = chrono::Utc::now().date_naive();
-        let start_date = end_date - chrono::Duration::days(days as i64);
-        info!("[DKB] Transactions {} to {}", start_date, end_date);
-
-        let mut all_booked = Mt940Data::new();
-        let mut all_pending = Mt940Data::new();
-        let mut touchdown: Option<TouchdownPoint> = None;
-
-        loop {
-            let result = dialog.transactions(
-                account, start_date, end_date, touchdown.as_ref(),
-            ).await?;
-
-            match result {
-                TransactionResult::NeedTan(_) => {
-                    return Err(FinTSError::Dialog(
-                        "DKB erfordert für Transaktionen eine weitere TAN-Freigabe.".into()
-                    ));
-                }
-                TransactionResult::Success(page) => {
-                    if !page.booked.is_empty() { all_booked.extend(page.booked.0); }
-                    if !page.pending.is_empty() { all_pending.extend(page.pending.0); }
-                    touchdown = page.touchdown;
-                    if touchdown.is_none() { break; }
-                    info!("[DKB] Touchdown: more data...");
-                }
-            }
-        }
-
-        let mut transactions = parse_mt940(all_booked.as_bytes(), TransactionStatus::Booked)?;
-        if !all_pending.is_empty() {
-            transactions.extend(parse_mt940(all_pending.as_bytes(), TransactionStatus::Pending)?);
-        }
-        info!("[DKB] {} transactions", transactions.len());
-
-        // ── Holdings (HKWPD) — best-effort, non-fatal ──
-        let holdings = match self.fetch_holdings(dialog, account).await {
-            Ok(h) => {
-                info!("[DKB] {} holdings", h.len());
-                h
-            }
-            Err(e) => {
-                warn!("[DKB] Holdings fetch failed (non-fatal): {}", e);
-                Vec::new()
-            }
-        };
-
-        Ok(FetchResult { balance, transactions, holdings })
+        // The generic workflow (balance + MT940 transactions + holdings) lives in
+        // `GenericBank` — DKB reuses it rather than keeping its own copy.
+        GenericBank::new(self.bank.clone()).fetch(dialog, account, days).await
     }
 
     async fn fetch_holdings(
@@ -314,37 +328,7 @@ impl BankOps for Dkb {
         dialog: &mut Dialog<Open>,
         account: &Account,
     ) -> Result<Vec<SecurityHolding>> {
-        info!("[DKB] Fetching holdings IBAN={}, BIC={}", account.iban(), account.bic());
-
-        let mut all_holdings = Vec::new();
-        let mut touchdown: Option<TouchdownPoint> = None;
-
-        loop {
-            let result = dialog.holdings(
-                account, None, touchdown.as_ref(),
-            ).await?;
-
-            match result {
-                HoldingsResult::NeedTan(_) => {
-                    warn!("[DKB] Holdings requires additional TAN — skipping");
-                    return Ok(all_holdings);
-                }
-                HoldingsResult::Empty => {
-                    info!("[DKB] No holdings data (depot may be empty or not supported)");
-                    break;
-                }
-                HoldingsResult::Success(page) => {
-                    info!("[DKB] Got {} holdings", page.holdings.len());
-                    all_holdings.extend(page.holdings);
-                    touchdown = page.touchdown;
-                    if touchdown.is_none() { break; }
-                    info!("[DKB] Holdings touchdown: more data...");
-                }
-            }
-        }
-
-        info!("[DKB] Total: {} holdings", all_holdings.len());
-        Ok(all_holdings)
+        GenericBank::new(self.bank.clone()).fetch_holdings(dialog, account).await
     }
 }
 
@@ -428,12 +412,66 @@ impl BankOps for GenericBank {
     }
 
     async fn fetch(&self, dialog: &mut Dialog<Open>, account: &Account, days: u32) -> Result<FetchResult> {
-        // Reuse DKB fetch logic (it's generic enough — just uses typed Dialog<Open> methods)
-        Dkb::new().fetch(dialog, account, days).await
+        let bank = self.bank.name.as_str();
+        info!("[{}] Fetching IBAN={}, BIC={}", bank, account.iban(), account.bic());
+
+        // ── Balance (HKSAL) ──
+        let balance = fetch_balance(dialog, account, bank).await;
+
+        // ── Transactions (HKKAZ) with pagination ──
+        let end_date = chrono::Utc::now().date_naive();
+        let start_date = end_date - chrono::Duration::days(days as i64);
+        let transactions = fetch_transactions(
+            dialog, account, start_date, end_date, bank, TransactionTanPolicy::Error,
+        ).await?;
+
+        // ── Holdings (HKWPD) — best-effort, non-fatal ──
+        let holdings = match self.fetch_holdings(dialog, account).await {
+            Ok(h) => {
+                info!("[{}] {} holdings", bank, h.len());
+                h
+            }
+            Err(e) => {
+                warn!("[{}] Holdings fetch failed (non-fatal): {}", bank, e);
+                Vec::new()
+            }
+        };
+
+        Ok(FetchResult { balance, transactions, holdings })
     }
 
     async fn fetch_holdings(&self, dialog: &mut Dialog<Open>, account: &Account) -> Result<Vec<SecurityHolding>> {
-        Dkb::new().fetch_holdings(dialog, account).await
+        let bank = self.bank.name.as_str();
+
+        let mut all_holdings = Vec::new();
+        let mut touchdown: Option<TouchdownPoint> = None;
+
+        loop {
+            let result = dialog.holdings(
+                account, None, touchdown.as_ref(),
+            ).await?;
+
+            match result {
+                HoldingsResult::NeedTan(_) => {
+                    warn!("[{}] Holdings requires additional TAN — skipping", bank);
+                    return Ok(all_holdings);
+                }
+                HoldingsResult::Empty => {
+                    info!("[{}] No holdings data (depot may be empty or not supported)", bank);
+                    break;
+                }
+                HoldingsResult::Success(page) => {
+                    info!("[{}] Got {} holdings", bank, page.holdings.len());
+                    all_holdings.extend(page.holdings);
+                    touchdown = page.touchdown;
+                    if touchdown.is_none() { break; }
+                    info!("[{}] Holdings touchdown: more data...", bank);
+                }
+            }
+        }
+
+        info!("[{}] Total: {} holdings", bank, all_holdings.len());
+        Ok(all_holdings)
     }
 }
 
@@ -504,18 +542,11 @@ impl AnyBank {
         account: &Account,
         opts: &FetchOpts,
     ) -> Result<FetchResult> {
-        use tracing::warn;
-        use crate::protocol::{BalanceResult, TransactionResult, HoldingsResult};
-        use crate::types::{Mt940Data, TransactionStatus, TouchdownPoint};
+        let bank = self.config().name.as_str();
 
         // ── Balance ──
         let balance = if opts.balance {
-            match dialog.balance(account).await {
-                Ok(BalanceResult::Success(b)) => Some(b),
-                Ok(BalanceResult::NeedTan(_)) => { warn!("Balance requires TAN — skipping"); None }
-                Ok(BalanceResult::Empty) => None,
-                Err(e) => { warn!("Balance failed: {}", e); None }
-            }
+            fetch_balance(dialog, account, bank).await
         } else {
             None
         };
@@ -524,27 +555,9 @@ impl AnyBank {
         let transactions = if opts.transactions {
             let end_date = chrono::Utc::now().date_naive();
             let start_date = end_date - chrono::Duration::days(opts.days.max(1) as i64);
-            let mut all_booked = Mt940Data::new();
-            let mut all_pending = Mt940Data::new();
-            let mut td: Option<TouchdownPoint> = None;
-            loop {
-                match dialog.transactions(account, start_date, end_date, td.as_ref()).await? {
-                    TransactionResult::NeedTan(_) => break,
-                    TransactionResult::Success(page) => {
-                        if !page.booked.is_empty() { all_booked.extend(page.booked.0); }
-                        if !page.pending.is_empty() { all_pending.extend(page.pending.0); }
-                        td = page.touchdown;
-                        if td.is_none() { break; }
-                    }
-                }
-            }
-            let mut txns = parse_mt940(all_booked.as_bytes(), TransactionStatus::Booked)
-                .unwrap_or_default();
-            if !all_pending.is_empty() {
-                txns.extend(parse_mt940(all_pending.as_bytes(), TransactionStatus::Pending)
-                    .unwrap_or_default());
-            }
-            txns
+            fetch_transactions(
+                dialog, account, start_date, end_date, bank, TransactionTanPolicy::Skip,
+            ).await?
         } else {
             Vec::new()
         };
