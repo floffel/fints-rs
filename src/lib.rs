@@ -8,38 +8,25 @@
 //! 1. **Protocol layer** (`protocol`): Typestate `Dialog<S>` — the dialog's auth
 //!    state is in the type system. Business ops on an unauthenticated dialog = compile error.
 //!
-//! 2. **Workflow layer** (`workflow`): Bank-specific workflows via `BankOps` trait.
+//! 2. **Workflow layer** (`workflow`): Bank workflows via the `BankOps` trait,
+//!    dispatched by BLZ (`bank_ops`/`AnyBank`; DKB and a generic implementation).
 //!
-//! 3. **Bank modules** (`dkb`): High-level, bank-specific APIs.
+//! 3. **Flow layer** (`flow`): High-level `Flow` for connect → TAN confirm → fetch.
 //!
-//! ## DKB — Quick start
-//!
-//! ```rust,no_run
-//! use fints::{dkb, Account, UserId, Pin, ProductId};
-//!
-//! # async fn example() -> fints::Result<()> {
-//! let (session, challenge) = dkb::connect(
-//!     &UserId::new("user"), &Pin::new("pin"), &ProductId::new("PRODUCT_ID"), None,
-//! ).await?;
-//! // User confirms pushTAN in banking app...
-//! let account = Account::new("DE123...", "BYLADEM1001")?;  // BIC required!
-//! let data = session.fetch(&account, 365).await?;
-//! println!("Balance: {:?}, {} transactions", data.balance, data.transactions.len());
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## Generic bank access
+//! ## Quick start
 //!
 //! ```rust,no_run
 //! use fints::{Flow, UserId, Pin, ProductId};
 //!
 //! # async fn example() -> fints::Result<()> {
+//! // BLZ 12030000 = DKB; any other registry BLZ works too.
 //! let (mut flow, challenge) = Flow::initiate(
 //!     "12030000", &UserId::new("user"), &Pin::new("pin"), &ProductId::new("PRODUCT_ID"),
 //!     None, None, None,
 //! ).await?;
+//! // User confirms pushTAN in banking app...
 //! let result = flow.confirm_and_fetch("DE123...", "BYLADEM...", 365).await?;
+//! println!("Balance: {:?}, {} transactions", result.balance, result.transactions.len());
 //! # Ok(())
 //! # }
 //! ```
@@ -63,9 +50,6 @@ pub mod audit;
 pub mod protocol;
 pub mod workflow;
 pub mod flow;
-
-// ── Bank APIs ──
-pub mod dkb;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Re-exports
