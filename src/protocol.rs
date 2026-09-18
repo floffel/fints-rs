@@ -597,6 +597,11 @@ impl Dialog<New> {
     pub fn with_params(mut self, params: &BankParams) -> Self {
         self.params = params.clone(); self
     }
+        
+    pub fn with_security_function(mut self, function: SecurityFunction) -> Self {
+        self.params.selected_security_function = function;
+        self
+    }
 
     pub fn with_tan_medium(mut self, medium: &TanMediumName) -> Self {
         self.params.selected_tan_medium = Some(medium.clone()); self

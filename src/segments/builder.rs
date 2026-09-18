@@ -5,7 +5,7 @@
 
 use chrono::{Local, NaiveDate};
 
-use crate::parser::{DataElement, DEG};
+use crate::parser::{DEG, DataElement};
 use crate::types::*;
 
 // ---- KTI (Kontoverbindung International) ----
@@ -60,6 +60,24 @@ impl Kti {
     }
 }
 
+fn pin_version(security_function: &str) -> &str {
+    if security_function.parse::<u16>().unwrap() >= 998 {
+        "1"
+    } else {
+        "2"
+    }
+}
+
+/// Extract (account_number, blz) from a German IBAN.
+/// DE IBANs: DE + 2 check + 8 BLZ + 10 account = 22 chars.
+fn extract_de_iban_parts(iban: &str) -> (String, String) {
+    if iban.len() == 22 && iban.starts_with("DE") {
+        (iban[12..].to_string(), iban[4..12].to_string())
+    } else {
+        (iban.to_string(), String::new())
+    }
+}
+
 // ---- Segment Header ----
 
 /// Create a segment header DEG: `TYPE:NUMBER:VERSION`
@@ -103,16 +121,19 @@ pub(crate) fn hnhbs(segment_number: u16, message_number: u16) -> Vec<DEG> {
 // ---- HNVSK (Verschlüsselungskopf) - Encryption Header, version 3 ----
 
 /// Build HNVSK:998:3 with PinTan dummy encryption parameters.
-pub(crate) fn hnvsk(blz: &str, user_id: &str, system_id: &str) -> Vec<DEG> {
+pub(crate) fn hnvsk(
+    blz: &str,
+    user_id: &str,
+    system_id: &str,
+    security_function: &str,
+) -> Vec<DEG> {
     vec![
         seg_header("HNVSK", 998, 3),
-        // Security profile: PIN:1
-        deg(vec![de_text("PIN"), de_text("1")]),
-        // Security function: 998 (encryption)
-        deg1(de_text("998")),
+        deg(vec![de_text("PIN"), de_text(pin_version(security_function))]),
+        deg1(de_text(security_function)),
         // Security role: 1 = ISS (issuer)
         deg1(de_text("1")),
-        // Security identification: role=2(MS), cid=empty, system_id
+        // Security identification: role=2(MS), cid=empty, identifier=system_id
         deg(vec![de_text("2"), de_empty(), de_text(system_id)]),
         // Security timestamp: type=1 (STS), date (YYYYMMDD), time (HHMMSS)
         {
@@ -168,10 +189,10 @@ pub(crate) fn hnshk(
     user_id: &str,
     system_id: &str,
 ) -> Vec<DEG> {
+    // let id_type = if system_id == "0" { "0" } else { "1" };
     vec![
         seg_header("HNSHK", segment_number, 4),
-        // Security profile: PIN:1
-        deg(vec![de_text("PIN"), de_text("1")]),
+        deg(vec![de_text("PIN"), de_text(pin_version(security_function))]),
         // Security function (e.g. "999" for one-step, "912" for pushTAN)
         deg1(de_text(security_function)),
         // Security reference (random number linking HNSHK <-> HNSHA)
@@ -180,7 +201,7 @@ pub(crate) fn hnshk(
         deg1(de_text("1")),
         // Security role: 1 = ISS
         deg1(de_text("1")),
-        // Security identification: role=2(MS), cid=empty, system_id
+        // Security identification: role=2(MS), cid=empty, identifier=system_id
         deg(vec![de_text("2"), de_empty(), de_text(system_id)]),
         // Security reference number: 1
         deg1(de_text("1")),
@@ -435,6 +456,7 @@ pub(crate) fn hkspa(segment_number: u16, version: u16) -> Vec<DEG> {
     vec![seg_header("HKSPA", segment_number, version)]
 }
 
+
 // ---- HKSAL (Saldenabfrage) - Balance Request, version 5-7 ----
 
 /// Build HKSAL for a specific SEPA account. Version 7 uses international account (IBAN/BIC).
@@ -453,14 +475,15 @@ pub(crate) fn hksal(
             deg1(de_text("N")),
         ]
     } else {
-        // Version 5: national account format (KTO)
+        // Version 5: national account format (KTO) — account_number + BLZ, not IBAN + BIC
+        let (account_number, blz) = extract_de_iban_parts(iban);
         vec![
             seg_header("HKSAL", segment_number, version),
             deg(vec![
-                de_text(iban),
+                de_text(&account_number),
                 de_empty(),
                 de_text("280"),
-                de_text(bic),
+                de_text(&blz),
             ]),
             deg1(de_text("N")),
         ]
@@ -497,14 +520,15 @@ pub(crate) fn hkkaz(
             deg1(de_date(end_date)),
         ]
     } else {
-        // Version 5
+        // Version 5: national account format (KTO) — account_number + BLZ, not IBAN + BIC
+        let (account_number, blz) = extract_de_iban_parts(iban);
         vec![
             seg_header("HKKAZ", segment_number, version),
             deg(vec![
-                de_text(iban),
+                de_text(&account_number),
                 de_empty(),
                 de_text("280"),
-                de_text(bic),
+                de_text(&blz),
             ]),
             deg1(de_text("N")),
             deg1(de_date(start_date)),

@@ -94,7 +94,7 @@ fn build_message_raw(
     inner_bytes.extend(serializer::serialize_segment(&hnsha_seg)?);
 
     // Build outer envelope
-    let hnvsk_seg = hnvsk(ctx.blz, ctx.user_id, ctx.system_id);
+    let hnvsk_seg = hnvsk(ctx.blz, ctx.user_id, ctx.system_id, ctx.security_function);
     let hnvsd_seg = hnvsd(&inner_bytes);
     let trailer_number = inner_segment_number;
     let hnhbs_seg = hnhbs(trailer_number, ctx.message_number);
