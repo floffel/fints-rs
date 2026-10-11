@@ -33,7 +33,9 @@
 
 // ── Infrastructure ──
 pub mod banks;
-pub mod banks_generated;
+pub mod banks_generated {
+    include!(concat!(env!("OUT_DIR"), "/banks_generated.rs"));
+}
 pub mod error;
 pub(crate) mod message;
 pub(crate) mod parser;
