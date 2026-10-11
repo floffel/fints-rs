@@ -33,6 +33,10 @@ csv = { version = "1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 flate2 = { version = "1", optional = true }
 
+[build-dependencies]
+csv = "1"
+encoding_rs = "0.8"
+
 [features]
 default = []
 cli = ["dep:clap", "dep:rpassword", "dep:comfy-table", "dep:csv", "dep:tracing-subscriber", "dep:flate2"]

@@ -31,21 +31,6 @@ impl BankConfig {
             url: FinTSUrl::new(url),
         }
     }
-
-    /// Create a BankConfig from raw (blz, bic, name, url) — used by generated code.
-    pub fn new_raw(
-        blz: impl Into<String>,
-        bic: impl Into<String>,
-        name: impl Into<String>,
-        url: impl Into<String>,
-    ) -> Self {
-        Self {
-            blz: Blz::new(blz),
-            bic: Bic::new(bic),
-            name: BankName::new(name),
-            url: FinTSUrl::new(url),
-        }
-    }
 }
 
 /// Get all known banks with FinTS PIN/TAN access.
