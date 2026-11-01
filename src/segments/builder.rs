@@ -70,11 +70,11 @@ fn pin_version(security_function: &str) -> &str {
 
 /// Extract (account_number, blz) from a German IBAN.
 /// DE IBANs: DE + 2 check + 8 BLZ + 10 account = 22 chars.
-fn extract_de_iban_parts(iban: &str) -> (String, String) {
+fn extract_de_iban_parts(iban: &str) -> (&str, &str) {
     if iban.len() == 22 && iban.starts_with("DE") {
-        (iban[12..].to_string(), iban[4..12].to_string())
+        (iban[12..].trim_start_matches('0'), &iban[4..12])
     } else {
-        (iban.to_string(), String::new())
+        (iban.get(12..).unwrap_or(iban).trim_start_matches('0'), iban.get(4..12).unwrap_or(""))
     }
 }
 
@@ -467,23 +467,23 @@ pub(crate) fn hksal(
     bic: &str,
     touchdown: Option<&str>,
 ) -> Vec<DEG> {
-    let mut degs = if version >= 6 {
-        // Version 6+: international account (KTI)
+    let mut degs = if version >= 7 {
+        // Version 7+: international account (KTI)
         vec![
             seg_header("HKSAL", segment_number, version),
             Kti::new(iban, bic).to_deg(),
             deg1(de_text("N")),
         ]
     } else {
-        // Version 5: national account format (KTO) — account_number + BLZ, not IBAN + BIC
+        // Version < 7: national account format (KTO) — account_number + BLZ, not IBAN + BIC
         let (account_number, blz) = extract_de_iban_parts(iban);
         vec![
             seg_header("HKSAL", segment_number, version),
             deg(vec![
-                de_text(&account_number),
+                de_text(account_number),
                 de_empty(),
                 de_text("280"),
-                de_text(&blz),
+                de_text(blz),
             ]),
             deg1(de_text("N")),
         ]
@@ -511,7 +511,7 @@ pub(crate) fn hkkaz(
     end_date: NaiveDate,
     touchdown: Option<&str>,
 ) -> Vec<DEG> {
-    let mut degs = if version >= 6 {
+    let mut degs = if version >= 7 {
         vec![
             seg_header("HKKAZ", segment_number, version),
             Kti::new(iban, bic).to_deg(),
@@ -520,15 +520,15 @@ pub(crate) fn hkkaz(
             deg1(de_date(end_date)),
         ]
     } else {
-        // Version 5: national account format (KTO) — account_number + BLZ, not IBAN + BIC
+        // Version < 7: national account format (KTO) — account_number + BLZ, not IBAN + BIC
         let (account_number, blz) = extract_de_iban_parts(iban);
         vec![
             seg_header("HKKAZ", segment_number, version),
             deg(vec![
-                de_text(&account_number),
+                de_text(account_number),
                 de_empty(),
                 de_text("280"),
-                de_text(&blz),
+                de_text(blz),
             ]),
             deg1(de_text("N")),
             deg1(de_date(start_date)),
@@ -567,21 +567,22 @@ pub(crate) fn hkwpd(
     currency: Option<&str>,
     touchdown: Option<&str>,
 ) -> Vec<DEG> {
-    let mut degs = if version >= 6 {
-        // Version 6+: international account (KTI)
+    let mut degs = if version >= 7 {
+        // Version 7+: international account (KTI)
         vec![
             seg_header("HKWPD", segment_number, version),
             Kti::new(iban, bic).to_deg(),
         ]
     } else {
-        // Older versions: national account format
+        // Version < 7: national account format (KTO) — account_number + BLZ, not IBAN + BIC
+        let (account_number, blz) = extract_de_iban_parts(iban);
         vec![
             seg_header("HKWPD", segment_number, version),
             deg(vec![
-                de_text(iban),
+                de_text(account_number),
                 de_empty(),
                 de_text("280"),
-                de_text(bic),
+                de_text(blz),
             ]),
         ]
     };
@@ -637,6 +638,14 @@ mod tests {
         let bytes = serialize_segment(&degs).unwrap();
         let wire = String::from_utf8(bytes).unwrap();
         assert_eq!(wire, "HKSAL:3:7+DE04120300001084174299:BYLADEM1001+N'");
+    }
+
+    #[test]
+    fn hksal_v5_wire_format_ktv() {
+        let degs = hksal(3, 5, "DE04120300001084174299", "BYLADEM1001", None);
+        let bytes = serialize_segment(&degs).unwrap();
+        let wire = String::from_utf8(bytes).unwrap();
+        assert_eq!(wire, "HKSAL:3:5+1084174299::280:12030000+N'");
     }
 
     #[test]
