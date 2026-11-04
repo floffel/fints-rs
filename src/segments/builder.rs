@@ -130,7 +130,7 @@ pub(crate) fn hnvsk(
     vec![
         seg_header("HNVSK", 998, 3),
         deg(vec![de_text("PIN"), de_text(pin_version(security_function))]),
-        deg1(de_text(security_function)),
+        deg1(de_text("998")),
         // Security role: 1 = ISS (issuer)
         deg1(de_text("1")),
         // Security identification: role=2(MS), cid=empty, identifier=system_id
