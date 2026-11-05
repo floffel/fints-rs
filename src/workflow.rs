@@ -157,7 +157,9 @@ async fn fetch_transactions(
 
     let mut transactions = parse_mt940(all_booked.as_bytes(), TransactionStatus::Booked)?;
     if !all_pending.is_empty() {
-        transactions.extend(parse_mt940(all_pending.as_bytes(), TransactionStatus::Pending)?);
+        if let Ok(pending) = parse_mt940(all_pending.as_bytes(), TransactionStatus::Pending) {
+            transactions.extend(pending);
+        }
     }
     info!("[{}] {} transactions", bank, transactions.len());
     Ok(transactions)
@@ -614,11 +616,10 @@ fn parse_mt940(data: &[u8], status: TransactionStatus) -> Result<Vec<Transaction
     if had_errors { warn!("MT940 encoding errors"); }
     let mt940_text = cow.into_owned();
 
-    let cleaned: String = mt940_text.lines()
-        .filter(|l| { let t = l.trim(); !t.is_empty() && t != "-" && t != "--" })
-        .collect::<Vec<_>>().join("\r\n") + "\r\n";
+    let prepared = prepare_mt940(&mt940_text);
+    if prepared.trim().is_empty() { return Ok(Vec::new()); }
 
-    let sanitized = mt940::sanitizers::to_swift_charset(&cleaned);
+    let sanitized = mt940::sanitizers::to_swift_charset(&prepared);
     let messages = mt940::parse_mt940(&sanitized)
         .map_err(|e| FinTSError::Mt940(format!("MT940 parse error: {}", e)))?;
 
@@ -665,4 +666,68 @@ fn parse_mt940(data: &[u8], status: TransactionStatus) -> Result<Vec<Transaction
         }
     }
     Ok(transactions)
+}
+
+fn prepare_mt940(text: &str) -> String {
+    let allowed = ["20", "21", "25", "28", "28C", "60F", "60M", "61", "86", "62F", "62M", "64", "65"];
+    let (mut out, mut keep, mut in_msg, mut has_60, mut has_62) = (String::new(), false, false, false, false);
+    let curr = text.lines().find_map(|l| {
+        let t = l.trim();
+        (t.starts_with(":34F:") && t.len() >= 8).then(|| &t[5..8])
+    }).unwrap_or("EUR");
+    let date = text.lines().find_map(|l| {
+        let t = l.trim();
+        (t.starts_with(":61:") && t.len() >= 10).then(|| &t[4..10])
+    }).unwrap_or("240101");
+
+    let close_msg = |out: &mut String, has_60: &mut bool, has_62: &mut bool| {
+        if !*has_60 { out.push_str(&format!(":60F:C{date}{curr}0,00\r\n")); *has_60 = true; }
+        if !*has_62 { out.push_str(&format!(":62F:C{date}{curr}0,00\r\n")); *has_62 = true; }
+    };
+
+    for raw in text.lines().map(str::trim).filter(|l| !l.is_empty() && *l != "-" && *l != "--") {
+        let mut line = raw.to_string();
+        if line.starts_with(":60:") { line = line.replacen(":60:", ":60F:", 1); }
+        if line.starts_with(":62:") { line = line.replacen(":62:", ":62F:", 1); }
+
+        if line.starts_with(':') {
+            if let Some(pos) = line[1..].find(':') {
+                if pos > 0 && pos <= 4 && line[1..=pos].chars().all(|c| c.is_ascii_alphanumeric()) {
+                    let tag = &line[1..=pos];
+                    keep = allowed.contains(&tag);
+                    if tag == "20" {
+                        if in_msg { close_msg(&mut out, &mut has_60, &mut has_62); }
+                        in_msg = true; has_60 = false; has_62 = false;
+                    } else if (tag == "61" || tag == "62F" || tag == "62M") && !has_60 {
+                        out.push_str(&format!(":60F:C{date}{curr}0,00\r\n"));
+                        has_60 = true;
+                    }
+                    if tag == "60F" || tag == "60M" { has_60 = true; }
+                    if tag == "62F" || tag == "62M" { has_62 = true; }
+                }
+            }
+        }
+        if keep { out.push_str(&line); out.push_str("\r\n"); }
+    }
+    if in_msg { close_msg(&mut out, &mut has_60, &mut has_62); }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mt940_mt942() {
+        let booked = b":20:1\r\n:25:A\r\n:28C:0\r\n:34F:EUR0,\r\n:13D:240101\r\n:60F:C240101EUR1000,00\r\n:61:2401020102D50,00NMSCNONREF\r\n:86:Shop\r\n:62F:C240102EUR950,00\r\n-";
+        assert_eq!(parse_mt940(booked, TransactionStatus::Booked).unwrap().len(), 1);
+
+        let pending = b":20:2\r\n:25:A\r\n:28C:0\r\n:34F:EUR0,\r\n:13D:241101\r\n:61:2411011101D25,50NTRFNONREF\r\n:86:Card\r\n:90D:1EUR25,50\r\n-";
+        let txs = parse_mt940(pending, TransactionStatus::Pending).unwrap();
+        assert_eq!(txs[0].amount.to_string(), "-25.50");
+        assert_eq!(txs[0].currency.as_str(), "EUR");
+
+        let empty = b":20:3\r\n:25:A\r\n:28C:0\r\n:34F:EUR0,\r\n:90D:0EUR0,00\r\n-";
+        assert!(parse_mt940(empty, TransactionStatus::Pending).unwrap().is_empty());
+    }
 }

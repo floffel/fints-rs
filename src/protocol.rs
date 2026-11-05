@@ -266,7 +266,7 @@ impl Response {
 
     /// Check for fatal errors. Returns `Ok(())` if no errors.
     pub fn check_errors(&self) -> Result<()> {
-        for code in self.all_codes() {
+        for code in self.segment_codes.iter().chain(&self.global_codes) {
             match &code.kind {
                 ResponseCodeKind::PinWrong => return Err(FinTSError::PinWrong),
                 ResponseCodeKind::AccountLocked => return Err(FinTSError::AccountLocked),
@@ -886,7 +886,7 @@ impl Dialog<Open> {
             },
         ];
 
-        if is_first && needs_tan {
+        if needs_tan {
             info!("[FinTS] transactions: HKKAZ + HKTAN:4 (HIPINS: TAN required)");
             segments.push(Segment::TanProcess4 {
                 reference_seg: SegmentRef::new("HKKAZ"),
@@ -949,7 +949,7 @@ impl Dialog<Open> {
             },
         ];
 
-        if is_first && needs_tan {
+        if needs_tan {
             info!("[FinTS] holdings: HKWPD + HKTAN:4 (HIPINS: TAN required)");
             segments.push(Segment::TanProcess4 {
                 reference_seg: SegmentRef::new("HKWPD"),
