@@ -443,11 +443,12 @@ pub(crate) fn hktan_process_s(
 /// Build HKTAB to request the list of registered TAN media (devices).
 /// Returns HITAB response with device names needed for pushTAN.
 pub(crate) fn hktab(segment_number: u16, version: u16) -> Vec<DEG> {
-    vec![
-        seg_header("HKTAB", segment_number, version),
-        // TAN medium class: A = all
-        deg1(de_text("A")),
-    ]
+    let mut degs = vec![seg_header("HKTAB", segment_number, version)];
+    if version >= 4 {
+        degs.push(deg1(de_text("0")));
+    }
+    degs.push(deg1(de_text("A")));
+    degs
 }
 
 // ---- HKSPA (SEPA-Kontoverbindung anfordern) - SEPA Account Info, version 1-3 ----

@@ -145,21 +145,43 @@ pub(crate) fn parse_hitan(seg: &RawSegment) -> (String, String, Option<Vec<u8>>)
 /// These are the registered devices/channels that can receive pushTAN notifications.
 pub(crate) fn parse_hitab(seg: &RawSegment) -> Vec<String> {
     let mut media = Vec::new();
+    let version = seg.segment_version();
 
     // HITAB: DEG0=header, DEG1+=TanMediumList entries
     // Each entry is a DEG with: status:medium_class:medium_name[:mobile_no_masked:...]
     // status: A=active, I=inactive, B=blocked
     for i in 1..seg.deg_count() {
         let d = seg.deg(i);
-        if d.len() < 3 {
+        if d.is_empty() || (i == 1 && d.len() == 1) {
             continue;
         }
-        let status = d.get_str(0);
-        // Only include active media
-        if status != "A" && status != "1" {
+
+        let (status, name_idx) = match version {
+            0..=3 => (d.get_str(0), 2),
+            4 => (d.get_str(1), 5),
+            _ => (d.get_str(1), 6),
+        };
+
+        let is_blocked = status == "2" || status == "G" || status == "B";
+        if is_blocked {
             continue;
         }
-        let name = d.get_str(2);
+
+        let mut name = d.get_str(name_idx);
+        if name.is_empty() {
+            // Fallback for banks with varying field counts: find first non-numeric string element
+            let skip = if version >= 5 { 3 } else { 2 };
+            if let Some(n) = d
+                .0
+                .iter()
+                .skip(skip)
+                .filter_map(|de| de.as_str())
+                .find(|s| !s.is_empty() && s.parse::<u64>().is_err())
+            {
+                name = n.to_string();
+            }
+        }
+
         if !name.is_empty() {
             media.push(name);
         }
@@ -966,5 +988,28 @@ mod tests {
 
         assert_eq!(find_highest_segment_version(&segments, "HIWPDS", 7), 6);
         assert_eq!(find_highest_segment_version(&segments, "HIWPDS", 5), 1);
+    }
+
+    #[test]
+    fn test_parse_hitab_version_4_phototan() {
+        // HITAB v4: DEG1 is tan_usage_option, DEG2 is TANMedia4
+        // TANMedia4 elements: class (M) : status (A) : card_nr () : card_seq () : card_type () : name (photoTAN-App)
+        let seg = parse_segment("HITAB:4:4:3+1+M:A:::photoTAN-App'");
+        let media = parse_hitab(&seg);
+        assert_eq!(media, vec!["photoTAN-App"]);
+    }
+
+    #[test]
+    fn test_parse_hitab_version_5_phototan() {
+        // HITAB v5: DEG1 is tan_usage_option, DEG2 is TANMedia5
+        // TANMedia5 elements: class (M) : status (1) : sec_fn (921) : card_nr () : card_seq () : card_type () : name (Mein Smartphone)
+        let seg = parse_segment("HITAB:4:5:3+2+M:1:921::::Mein Smartphone'");
+        let media = parse_hitab(&seg);
+        assert_eq!(media, vec!["Mein Smartphone"]);
+
+        // Fallback test when fewer empty DEs are present
+        let seg_fallback = parse_segment("HITAB:4:5:3+2+M:1:921:::Mein Smartphone'");
+        let media_fallback = parse_hitab(&seg_fallback);
+        assert_eq!(media_fallback, vec!["Mein Smartphone"]);
     }
 }

@@ -104,6 +104,8 @@ pub(crate) enum Segment {
     TanPollDecoupled { task_reference: TaskReference, tan_medium: Option<TanMediumName> },
     /// HKTAN process 2: submit TAN response
     TanProcess2 { task_reference: TaskReference, tan_medium: Option<TanMediumName> },
+    /// HKTAB: TAN-Medien abfragen
+    TanMedia,
     /// HKEND: dialog end
     End { dialog_id: DialogId },
 }
@@ -145,6 +147,10 @@ impl Segment {
             Segment::TanProcess2 { task_reference, tan_medium } => {
                 let version = params.hktan_version();
                 hktan_process2(0, version, task_reference.as_str(), tan_medium.as_ref().map(|t| t.as_str()))
+            }
+            Segment::TanMedia => {
+                let version = params.supported_version("HITABS", 4).max(2);
+                hktab(0, version)
             }
             Segment::End { dialog_id } => {
                 hkend(0, dialog_id.as_str())
@@ -703,6 +709,27 @@ impl Dialog<New> {
         self.params.ingest_response(&response, &mut self.system_id);
         response.check_errors()?;
         Ok((self.transition(), response))
+    }
+
+    /// Query registered TAN media (HKTAB).
+    /// Used by banks (e.g. Deutsche Bank) that require specifying the TAN medium name.
+    pub async fn query_tan_media(mut self) -> Result<Vec<String>> {
+        let segments = [
+            self.identify_segment(),
+            self.process_prep_segment(),
+            Segment::TanMedia,
+        ];
+
+        let response = self.send_segments(&segments).await?;
+        self.extract_dialog_id(&response);
+
+        let mut media = Vec::new();
+        if let Some(hitab) = response.find_segment("HITAB") {
+            media = parse_hitab(hitab);
+        }
+
+        self.send_end().await.ok();
+        Ok(media)
     }
 }
 
