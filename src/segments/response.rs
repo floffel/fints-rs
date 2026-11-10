@@ -1002,14 +1002,14 @@ mod tests {
     #[test]
     fn test_parse_hitab_version_5_phototan() {
         // HITAB v5: DEG1 is tan_usage_option, DEG2 is TANMedia5
-        // TANMedia5 elements: class (M) : status (1) : sec_fn (921) : card_nr () : card_seq () : card_type () : name (Mein Smartphone)
-        let seg = parse_segment("HITAB:4:5:3+2+M:1:921::::Mein Smartphone'");
+        // TANMedia5 elements: class (M) : status (1) : sec_fn (921) : card_nr () : card_seq () : card_type () : name (Test Smartphone)
+        let seg = parse_segment("HITAB:4:5:3+2+M:1:921::::Test Smartphone'");
         let media = parse_hitab(&seg);
-        assert_eq!(media, vec!["Mein Smartphone"]);
+        assert_eq!(media, vec!["Test Smartphone"]);
 
         // Fallback test when fewer empty DEs are present
-        let seg_fallback = parse_segment("HITAB:4:5:3+2+M:1:921:::Mein Smartphone'");
+        let seg_fallback = parse_segment("HITAB:4:5:3+2+M:1:921:::Test Smartphone'");
         let media_fallback = parse_hitab(&seg_fallback);
-        assert_eq!(media_fallback, vec!["Mein Smartphone"]);
+        assert_eq!(media_fallback, vec!["Test Smartphone"]);
     }
 }

@@ -704,6 +704,14 @@ mod tests {
     }
 
     #[test]
+    fn hktab_v4_wire_format() {
+        let degs = hktab(3, 4);
+        let bytes = serialize_segment(&degs).unwrap();
+        let wire = String::from_utf8(bytes).unwrap();
+        assert_eq!(wire, "HKTAB:3:4+0+A'");
+    }
+
+    #[test]
     #[should_panic(expected = "IBAN must not be empty")]
     fn kti_panics_on_empty_iban() {
         Kti::new("", "BYLADEM1001");
