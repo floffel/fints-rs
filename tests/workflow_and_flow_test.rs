@@ -101,9 +101,19 @@ fn bank_ops_dispatch_dkb_blz() {
 
 #[test]
 fn bank_ops_dispatch_generic_blz() {
-    let bank = bank_ops("10070000").expect("known non-DKB BLZ should resolve");
-    assert!(matches!(bank, AnyBank::Generic(_)), "BLZ 10070000 must map to GenericBank");
-    assert_eq!(bank.config().blz.as_str(), "10070000");
+    let bank = bank_ops("10050000").expect("known generic BLZ should resolve");
+    assert!(matches!(bank, AnyBank::Generic(_)), "BLZ 10050000 must map to GenericBank");
+    assert_eq!(bank.config().blz.as_str(), "10050000");
+}
+
+#[test]
+fn bank_ops_dispatch_deutsche_bank() {
+    let bank = bank_ops("50070010").expect("Deutsche Bank BLZ should resolve");
+    assert!(
+        matches!(bank, AnyBank::DeutscheBank(_)),
+        "BLZ 50070010 must map to DeutscheBank"
+    );
+    assert_eq!(bank.config().blz.as_str(), "50070010");
 }
 
 #[test]

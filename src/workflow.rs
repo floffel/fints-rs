@@ -12,8 +12,10 @@ use crate::banks::BankConfig;
 use crate::error::{FinTSError, Result};
 use crate::protocol::*;
 use crate::types::*;
+use crate::workflow::deutsche_bank::DeutscheBank;
 use crate::workflow::ing::Ing;
 
+mod deutsche_bank;
 mod ing;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -489,6 +491,7 @@ impl BankOps for GenericBank {
 pub enum AnyBank {
     Dkb(Dkb),
     Ing(Ing),
+    DeutscheBank(DeutscheBank),
     Generic(GenericBank),
 }
 
@@ -497,6 +500,7 @@ impl AnyBank {
         match self {
             AnyBank::Dkb(b) => b.config(),
             AnyBank::Ing(b) => b.config(),
+            AnyBank::DeutscheBank(b) => b.config(),
             AnyBank::Generic(b) => b.config(),
         }
     }
@@ -513,6 +517,7 @@ impl AnyBank {
         match self {
             AnyBank::Dkb(b) => b.initiate(username, pin, product_id, system_id, target_iban, target_bic).await,
             AnyBank::Ing(b) => b.initiate(username, pin, product_id, system_id, target_iban, target_bic).await,
+            AnyBank::DeutscheBank(b) => b.initiate(username, pin, product_id, system_id, target_iban, target_bic).await,
             AnyBank::Generic(b) => b.initiate(username, pin, product_id, system_id, target_iban, target_bic).await,
         }
     }
@@ -526,6 +531,7 @@ impl AnyBank {
         match self {
             AnyBank::Dkb(b) => b.fetch(dialog, account, days).await,
             AnyBank::Ing(b) => b.fetch(dialog, account, days).await,
+            AnyBank::DeutscheBank(b) => b.fetch(dialog, account, days).await,
             AnyBank::Generic(b) => b.fetch(dialog, account, days).await,
         }
     }
@@ -538,6 +544,7 @@ impl AnyBank {
         match self {
             AnyBank::Dkb(b) => b.fetch_holdings(dialog, account).await,
             AnyBank::Ing(b) => b.fetch_holdings(dialog, account).await,
+            AnyBank::DeutscheBank(b) => b.fetch_holdings(dialog, account).await,
             AnyBank::Generic(b) => b.fetch_holdings(dialog, account).await,
         }
     }
@@ -594,6 +601,9 @@ pub fn bank_ops(blz: &str) -> Result<AnyBank> {
     match blz {
         "12030000" => Ok(AnyBank::Dkb(Dkb::new())),
         "50010517" => Ok(AnyBank::Ing(Ing::new(config))),
+        _ if config.url.as_str().contains("deutsche-bank.de") => {
+            Ok(AnyBank::DeutscheBank(DeutscheBank::new(config)))
+        }
         _ => Ok(AnyBank::Generic(GenericBank::new(config))),
     }
 }
